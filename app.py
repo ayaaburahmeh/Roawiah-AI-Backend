@@ -8,17 +8,20 @@ import google.generativeai as genai
 # ==========================================
 # 1. إعداد جيميناي
 # ==========================================
+# جلب المفتاح من بيئة السيرفر (Render) لضمان الأمان
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    # استخدام الموديل اللي إنتي حددتيه بالكود تبعك
-    model_llm = genai.GenerativeModel('gemini-1.5-flash') 
+    # تعديل اسم الموديل ليكون النسخة المستقرة
+    model_llm = genai.GenerativeModel('gemini-2.5-flash') 
 
 # ==========================================
-# 2. تهيئة التطبيق
+# 2. تهيئة التطبيق (FastAPI)
 # ==========================================
 app = FastAPI(title="Roawiah AI Engine")
 
+# تفعيل CORS للسماح لموقع فرح بالاتصال بالسيرفر بدون قيود متصفح
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -28,7 +31,7 @@ app.add_middleware(
 )
 
 # ==========================================
-# 3. تحميل الموديلات 
+# 3. تحميل الموديلات والمشفرات
 # ==========================================
 try:
     rf_model = joblib.load('emotional_model.pkl')
@@ -39,14 +42,14 @@ except Exception as e:
     print(f"❌ خطأ في تحميل الموديلات: {e}")
 
 # ==========================================
-# 4. تعريف هيكل البيانات (يطابق الموديل تبعك 100%)
+# 4. تعريف هيكل البيانات (المدخلات من موقع فرح)
 # ==========================================
 class PurchaseRequest(BaseModel):
     hour: int
     day_of_week: int
     main_category: str
     brand: str
-    product_name: str # ضفناها عشان نمررها لجيميناي حسب كودك
+    product_name: str 
 
 # ==========================================
 # 5. البوابة الرئيسية لمعالجة الطلبات
@@ -54,17 +57,19 @@ class PurchaseRequest(BaseModel):
 @app.post("/predict")
 async def predict_emotion(request: PurchaseRequest):
     try:
-        # أ. التشفير
+        # أ. تحويل النصوص (Category & Brand) إلى أرقام يفهمها الموديل
         cat_enc = le_cat.transform([request.main_category])[0]
         brand_enc = le_brand.transform([request.brand])[0]
         
-        # ب. التوقع باستخدام العتبة 0.60 زي ما عملتي بالخلية 25
+        # ب. التنبؤ بالتهور بناءً على الميزات والوقت
         features = [[request.hour, request.day_of_week, cat_enc, brand_enc]]
         prob = rf_model.predict_proba(features)[0][1]
+        
+        # استخدام العتبة 60% كما حددتِ في تجاربك
         prediction = 1 if prob >= 0.60 else 0
         is_emotional = bool(prediction == 1)
         
-        # ج. صياغة الرسالة عبر Gemini (نفس الخلية 28 بالضبط)
+        # ج. صياغة الرسالة عبر Gemini في حالة الاندفاع فقط
         gemini_message = ""
         if is_emotional and GEMINI_API_KEY:
             tone = "نصيحة أخوية لطيفة جداً" if prob < 0.8 else "تنبيه حريص وودي"
@@ -78,7 +83,7 @@ async def predict_emotion(request: PurchaseRequest):
             response = model_llm.generate_content(prompt)
             gemini_message = response.text.strip()
         
-        # د. إرسال الرد
+        # د. إرسال الرد النهائي
         return {
             "is_emotional": is_emotional,
             "probability": prob,
